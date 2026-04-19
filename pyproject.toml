@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "telltalere-census"
+version = "0.1.0"
+description = "Shared Census PUMS / ACS data layer for Telltale RE products."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Telltale Real Estate LLC" }]
+license = { text = "Proprietary" }
+
+dependencies = [
+    "pandas",
+    "requests",
+    "pyarrow",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools]
+packages = ["telltalere_census"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+telltalere_census = ["data/*.parquet"]
