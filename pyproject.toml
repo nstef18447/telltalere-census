@@ -26,3 +26,8 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 telltalere_census = ["data/*.parquet"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks tests that hit live external APIs (Census). Skipped in fast unit runs.",
+]

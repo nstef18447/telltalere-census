@@ -147,19 +147,85 @@ PUMS_DEFAULT_PERSON_VARS: Final[list[str]] = [
 
 
 # ---------------------------------------------------------------------------
-# ACS5 Block-Group Summary Table Defaults
+# ACS5 Summary Table Defaults (block-group / tract)
 # ---------------------------------------------------------------------------
-# Starter set: total population, household count, median household income,
-# median gross rent. Caller typically extends this with table-specific
-# variables (B25034 vintage, B19013 income detail, etc.).
+# BTR-oriented default for block-group + tract demand analysis. Pairs with
+# pums_fetch for PUMA-level behavioral profile. 45 estimate variables; MOE
+# auto-pairing (include_moe=True in fetch_acs_data) brings the request to 90.
+# All codes verified against the 2024 ACS5 data dictionary on 2026-04-19.
+#
+# Deviations from the original spec:
+#   - B25118 renter-income codes shifted from the spec's _014E..024E to the
+#     actual _015E..025E (the spec had misidentified _014E, the renter-occupied
+#     subtotal, as the "< $5,000" bracket — Census starts renter brackets at
+#     _015E).
+#   - B25007 renter-age codes shifted from the spec's _009E..017E to the actual
+#     _013E..021E (the spec's _009E is the "owner 65-74" bracket in the table).
+#   - Both renter-occupied subtotals (B25118_014E, B25007_012E) are included
+#     explicitly so `sum(brackets) ≈ subtotal` can be used as a sanity check.
+#   - B25118_025E ($150k+) is the true top renter bracket (the spec's
+#     _024E top was incorrect).
 
 ACS_BG_DEFAULT_VARS: Final[list[str]] = [
-    "B01003_001E",   # total population
-    "B11001_001E",   # total households
-    "B19013_001E",   # median household income (dollars)
-    "B25064_001E",   # median gross rent (dollars)
-    "B25003_002E",   # owner-occupied households
-    "B25003_003E",   # renter-occupied households
+    # Tenure totals
+    "B25003_001E",   # Total occupied housing units
+    "B25003_002E",   # Owner-occupied
+    "B25003_003E",   # Renter-occupied
+    "B11016_001E",   # Total households (B11016 table total)
+    "B25010_003E",   # Average household size, renter-occupied
+
+    # Renter household income distribution (B25118, renter section)
+    "B25118_014E",   # Renter-occupied: subtotal (sanity-check variable)
+    "B25118_015E",   # Renter HH: less than $5,000
+    "B25118_016E",   # Renter HH: $5,000 to $9,999
+    "B25118_017E",   # Renter HH: $10,000 to $14,999
+    "B25118_018E",   # Renter HH: $15,000 to $19,999
+    "B25118_019E",   # Renter HH: $20,000 to $24,999
+    "B25118_020E",   # Renter HH: $25,000 to $34,999
+    "B25118_021E",   # Renter HH: $35,000 to $49,999
+    "B25118_022E",   # Renter HH: $50,000 to $74,999
+    "B25118_023E",   # Renter HH: $75,000 to $99,999
+    "B25118_024E",   # Renter HH: $100,000 to $149,999
+    "B25118_025E",   # Renter HH: $150,000 or more
+    "B25119_003E",   # Median household income, renter-occupied (dollars)
+
+    # Rent paid
+    "B25064_001E",   # Median gross rent (dollars)
+    "B25071_001E",   # Median gross rent as percentage of household income
+
+    # Age of householder (B25007, renter section)
+    "B25007_001E",   # Tenure by age: table total
+    "B25007_012E",   # Renter-occupied: subtotal (sanity-check variable)
+    "B25007_013E",   # Renter: householder 15 to 24 years
+    "B25007_014E",   # Renter: householder 25 to 34 years
+    "B25007_015E",   # Renter: householder 35 to 44 years
+    "B25007_016E",   # Renter: householder 45 to 54 years
+    "B25007_017E",   # Renter: householder 55 to 59 years
+    "B25007_018E",   # Renter: householder 60 to 64 years
+    "B25007_019E",   # Renter: householder 65 to 74 years
+    "B25007_020E",   # Renter: householder 75 to 84 years
+    "B25007_021E",   # Renter: householder 85 years and over
+
+    # Owner-side comparison values (rent vs own context)
+    "B25077_001E",   # Median home value (dollars), owner-occupied
+    "B25088_002E",   # Median monthly owner costs, housing units with a mortgage
+
+    # Units in structure
+    "B25024_001E",   # Total units in structure
+    "B25024_002E",   # 1, detached
+    "B25024_003E",   # 1, attached
+    "B25024_004E",   # 2 units
+    "B25024_005E",   # 3 or 4 units
+    "B25024_006E",   # 5 to 9 units
+    "B25024_007E",   # 10 to 19 units
+    "B25024_008E",   # 20 to 49 units
+    "B25024_009E",   # 50 or more units
+
+    # Year structure built (stock age context)
+    "B25034_001E",   # Total
+    "B25034_002E",   # Built 2020 or later
+    "B25034_003E",   # Built 2010 to 2019
+    "B25034_004E",   # Built 2000 to 2009
 ]
 
 

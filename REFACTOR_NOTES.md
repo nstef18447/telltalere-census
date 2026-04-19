@@ -3,7 +3,97 @@
 One-time refactor that lifted the Census data layer out of `ami-tool` into a
 standalone package consumed via editable install.
 
-Date captured: 2026-04-19.
+Date captured: 2026-04-19 (session 1).
+Updated: 2026-04-19 (session 2 — `bg_fetch` replaced by `acs_fetch`).
+
+## Session 2 — `acs_fetch` implementation (2026-04-19)
+
+Session 1 shipped `bg_fetch.py` as a minimal state-level fetcher keyed on
+`(year, state)`. Session 2 replaced it with `acs_fetch.py`, expanding
+scope and fixing a latent bug.
+
+**Renamed** `bg_fetch.py` → `acs_fetch.py`. The new name pairs with
+`pums_fetch.py` (both named by the Census product they pull from) and
+reflects that the module now supports both block-group and tract
+geography in one code path.
+
+**Fixed** a latent API bug: `bg_fetch` used `in=state:{st}` for
+block-group queries, which returns `400 unknown/unsupported geography
+hierarchy` against 2024 ACS5. Block-group queries require
+`in=state:{st} county:*`. Verified by direct API probe on 2026-04-19.
+Tract queries still work with `in=state:{st}`. Both patterns documented
+in `acs_fetch.py`'s module docstring with the test date.
+
+**Added** explicit MOE auto-pairing: when `include_moe=True` (default),
+every `_E` estimate variable is paired with its `_M` companion inside
+the fetcher. Callers never type MOEs.
+
+**Added** chunking for the Census API's 50-variable-per-call limit.
+`fetch_acs_data` sorts its variable list, splits into deterministic
+≤50-var chunks, fetches each chunk independently, and inner-joins on
+the composite GEOID. Chunk-boundary determinism matters for cache
+repeatability and debugging. Row-count mismatches across chunks log a
+warning (not silent outer-join).
+
+**Added** special-value normalization. Census sentinels
+(`-555555555`, `-222222222`, `-333333333`, `-666666666`, `-888888888`,
+`-999999999`, plus string sentinels `""`, `"*"`, `"**"`, `"***"`,
+`"(X)"`, `"null"`, `"N"`, `"-"`) are mapped to pandas NA. Numeric
+columns use nullable `Int64` (whole numbers) or `Float64` (fractional,
+e.g. average household size). `.isna()` works uniformly downstream.
+
+**Added** tract geography support: `acs5_{vintage}_{state_fips}_tract.parquet`
+alongside the block-group parquet. Same caching semantics; same merge-union
+behavior on variable-list misses.
+
+**Added** 45-variable BTR-oriented default list (`ACS_BG_DEFAULT_VARS`),
+replacing the 6-variable starter set. Covers tenure totals, renter
+income distribution (B25118), renter-age distribution (B25007), rent
+paid (B25064/B25071), median home value (B25077/B25088), units in
+structure (B25024), and year built (B25034). MOE auto-pairing brings
+the request to 90 codes (2 chunks under the 50-var API limit).
+
+**Verification caught two offset errors in the session 2 spec**
+before writing any fetch code:
+  - Renter income brackets (B25118): spec had `_014E..024E`; actual is
+    `_015E..025E` (spec confused the `_014E` renter subtotal with the
+    `< $5,000` bracket).
+  - Renter age brackets (B25007): spec had `_009E..017E`; actual is
+    `_013E..021E` (spec's `_009E` is "owner 65-74 years").
+Corrected codes verified via `api.census.gov/data/2024/acs/acs5/variables/{var}.json`.
+Both renter subtotals (B25118_014E, B25007_012E) included as
+sanity-check variables to enable `sum(brackets) ≈ subtotal` assertions.
+
+**Added** `tests/test_acs_fetch_lake_county.py` — pytest integration
+suite marked `@pytest.mark.integration`. Fetches Illinois at both
+block-group (`len(lake) >= 300`) and tract (`len(lake) >= 80`)
+geography, asserts total households within 5% of authoritative Lake
+County 2024 ACS5 value (258,455), renter share 20-40%, MOE columns
+complete, median gross rent coverage ≥50% (actual ~60% at BG; Census
+suppresses this field with `-666666666` in ~40% of Lake County BGs due
+to sample-size thresholds). 12/12 tests pass. Marion benchmark also
+passes unchanged as smoke check.
+
+**Added** pytest marker registration to `pyproject.toml` under
+`[tool.pytest.ini_options]`.
+
+### Things session 2 deferred
+
+1. **Per-varlist cache filename hashing**. `acs_fetch` still caches per
+   `(vintage, state, geography)`, not `(vintage, state, geography,
+   sorted_variable_tuple)`. When a caller requests a new variable, the
+   fetcher re-fetches the UNION and rewrites the parquet. This is
+   correct but thrashes the cache if two callers alternate disjoint
+   variable sets. Deferred to when that access pattern appears.
+
+2. **Vintage-aware `in=` clause**. Currently hardcoded per geography
+   (BG: `state:X county:*`, tract: `state:X`). If a future vintage
+   changes this, branch on `vintage` in `_fetch_one_chunk`.
+
+3. **Non-standard variable codes** (`NAME`, `GEO_ID`). Currently
+   unsupported — `_moe_of` returns None for codes not ending in `E`.
+   If a caller needs these, extend the fetcher (they don't have MOE
+   companions; just pass through).
 
 ## What moved where
 
@@ -21,7 +111,7 @@ Date captured: 2026-04-19.
 
 | New file | Purpose |
 | --- | --- |
-| `telltalere_census/bg_fetch.py` | ACS5 block-group summary fetch, variable-list driven. Parallel structure to `pums_fetch`. Required by the BTR product. |
+| `telltalere_census/acs_fetch.py` | ACS5 block-group / tract summary fetch, variable-list driven, MOE auto-pairing, chunked for 50-var API limit. Parallel structure to `pums_fetch`. Required by the BTR product. (Originally shipped in session 1 as `bg_fetch.py` — replaced in session 2, see below.) |
 | `telltalere_census/cbsa_crosswalk.py` | Thin loader for the shipped `county_to_cbsa.parquet`. Does not build the crosswalk — that logic still lives in ami-tool's `costar_fetch.py`. |
 | `telltalere_census/cache.py` | Filename convention helpers (`pums_h_filename`, `bg_acs5_filename`, etc.) plus `resolve_cache_dir()`. Resolution order: explicit arg → `TELLTALERE_CENSUS_CACHE_DIR` env var → `./data/` relative to CWD. |
 | `telltalere_census/weights.py` | Weight-aware aggregation helpers: `weighted_sum`, `weighted_count_by`, `weighted_mean`, `weighted_share`. Consolidates the `sum(WGTP)` / `np.average(..., weights=WGTP)` patterns previously inlined across ami-tool. |
@@ -106,14 +196,14 @@ Two cosmetic differences:
 
 2. **Global state in `_last_county_fips`** — see coupling flag #1.
 
-3. **BG cache keyed on `(year, state)` not `(year, state, vars)`**.
-   `bg_fetch.fetch_bg_data` caches to a single parquet per state/year.
-   Callers requesting different variable sets will either hit a cache miss
-   or retrieve the cached file and find their requested columns missing.
-   The current logic detects missing columns and re-fetches, but this
-   thrashes the cache. Proper fix is either per-varlist-hash cache files
-   or union-of-columns merging. Deferred to when a second consumer
-   surfaces the problem.
+3. **ACS cache keyed on `(vintage, state, geography)` not `(vintage,
+   state, geography, vars)`**. `acs_fetch.fetch_acs_data` caches to a
+   single parquet per state/vintage/geography. Session 2 made the
+   missing-variable behavior explicit: re-fetch the UNION of cached and
+   newly requested variables and write back as one coherent snapshot
+   (not partial deltas). This is correct but thrashes the cache if two
+   callers alternate disjoint variable sets. Proper fix is per-varlist-
+   hash cache filenames. Deferred to when that access pattern appears.
 
 4. **CBSA crosswalk build logic still lives in `costar_fetch.py`**. The
    lookup half was extracted, but the Census XLSX parsing stays in
