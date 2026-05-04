@@ -8,3 +8,10 @@ __pycache__/
 # Build artifacts
 build/
 dist/
+
+# Runtime caches (default cache dir for fetch_acs_data / fetch_pums_data /
+# tract-to-PUMA crosswalk download). Per-developer; never committed.
+data/
+
+# Build script logs
+*.log
