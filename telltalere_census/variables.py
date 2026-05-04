@@ -150,11 +150,12 @@ PUMS_DEFAULT_PERSON_VARS: Final[list[str]] = [
 # ACS5 Summary Table Defaults (block-group / tract)
 # ---------------------------------------------------------------------------
 # Both-tenure default for block-group + tract demand analysis. Pairs with
-# pums_fetch for PUMA-level behavioral profile. 84 estimate variables; MOE
+# pums_fetch for PUMA-level behavioral profile. 85 estimate variables; MOE
 # auto-pairing (include_moe=True in fetch_acs_data) brings the request to
-# 168, distributed across 4 chunks (50-var-per-call API ceiling).
+# 170, distributed across 4 chunks (50-var-per-call API ceiling).
 # All codes verified against the 2024 ACS5 data dictionary
-# on 2026-04-19 (renter section) and 2026-05-04 (owner + B25009 sections).
+# on 2026-04-19 (renter section), 2026-05-04 (owner + B25009 sections),
+# and 2026-05-04 (B01003 total population, session 5).
 #
 # Tenure-symmetry decisions:
 #   - Owner brackets included for B25118 (income), B25007 (age),
@@ -177,6 +178,9 @@ PUMS_DEFAULT_PERSON_VARS: Final[list[str]] = [
 #     _024E top was incorrect).
 
 ACS_BG_DEFAULT_VARS: Final[list[str]] = [
+    # Population total (denominator for almost everything else)
+    "B01003_001E",   # Total population
+
     # Tenure totals (authoritative denominators)
     "B25003_001E",   # Total occupied housing units
     "B25003_002E",   # Owner-occupied
