@@ -149,33 +149,57 @@ PUMS_DEFAULT_PERSON_VARS: Final[list[str]] = [
 # ---------------------------------------------------------------------------
 # ACS5 Summary Table Defaults (block-group / tract)
 # ---------------------------------------------------------------------------
-# BTR-oriented default for block-group + tract demand analysis. Pairs with
-# pums_fetch for PUMA-level behavioral profile. 45 estimate variables; MOE
-# auto-pairing (include_moe=True in fetch_acs_data) brings the request to 90.
-# All codes verified against the 2024 ACS5 data dictionary on 2026-04-19.
+# Both-tenure default for block-group + tract demand analysis. Pairs with
+# pums_fetch for PUMA-level behavioral profile. 84 estimate variables; MOE
+# auto-pairing (include_moe=True in fetch_acs_data) brings the request to
+# 168, distributed across 4 chunks (50-var-per-call API ceiling).
+# All codes verified against the 2024 ACS5 data dictionary
+# on 2026-04-19 (renter section) and 2026-05-04 (owner + B25009 sections).
+#
+# Tenure-symmetry decisions:
+#   - Owner brackets included for B25118 (income), B25007 (age),
+#     B25009 (HH size). Same display bins are used downstream for both
+#     tenures so renter/owner panels are comparable; the package itself
+#     ships no bin schemes (binning lives in consumer projects).
+#   - Owner subtotals (B25118_002E, B25007_002E, B25009_002E) and the
+#     B25118 / B25007 renter subtotals stay in the list as sanity-check
+#     variables — `sum(brackets) ≈ subtotal` and `B25003_002E + B25003_003E
+#     ≈ B25003_001E` are useful invariants when debugging suppression.
 #
 # Deviations from the original spec:
 #   - B25118 renter-income codes shifted from the spec's _014E..024E to the
-#     actual _015E..025E (the spec had misidentified _014E, the renter-occupied
-#     subtotal, as the "< $5,000" bracket — Census starts renter brackets at
-#     _015E).
-#   - B25007 renter-age codes shifted from the spec's _009E..017E to the actual
-#     _013E..021E (the spec's _009E is the "owner 65-74" bracket in the table).
-#   - Both renter-occupied subtotals (B25118_014E, B25007_012E) are included
-#     explicitly so `sum(brackets) ≈ subtotal` can be used as a sanity check.
+#     actual _015E..025E (the spec had misidentified _014E, the renter-
+#     occupied subtotal, as the "< $5,000" bracket — Census starts renter
+#     brackets at _015E).
+#   - B25007 renter-age codes shifted from the spec's _009E..017E to the
+#     actual _013E..021E (the spec's _009E is the "owner 65-74" bracket).
 #   - B25118_025E ($150k+) is the true top renter bracket (the spec's
 #     _024E top was incorrect).
 
 ACS_BG_DEFAULT_VARS: Final[list[str]] = [
-    # Tenure totals
+    # Tenure totals (authoritative denominators)
     "B25003_001E",   # Total occupied housing units
     "B25003_002E",   # Owner-occupied
     "B25003_003E",   # Renter-occupied
     "B11016_001E",   # Total households (B11016 table total)
     "B25010_003E",   # Average household size, renter-occupied
 
+    # Owner household income distribution (B25118, owner section)
+    "B25118_002E",   # Owner-occupied: subtotal
+    "B25118_003E",   # Owner HH: less than $5,000
+    "B25118_004E",   # Owner HH: $5,000 to $9,999
+    "B25118_005E",   # Owner HH: $10,000 to $14,999
+    "B25118_006E",   # Owner HH: $15,000 to $19,999
+    "B25118_007E",   # Owner HH: $20,000 to $24,999
+    "B25118_008E",   # Owner HH: $25,000 to $34,999
+    "B25118_009E",   # Owner HH: $35,000 to $49,999
+    "B25118_010E",   # Owner HH: $50,000 to $74,999
+    "B25118_011E",   # Owner HH: $75,000 to $99,999
+    "B25118_012E",   # Owner HH: $100,000 to $149,999
+    "B25118_013E",   # Owner HH: $150,000 or more
+
     # Renter household income distribution (B25118, renter section)
-    "B25118_014E",   # Renter-occupied: subtotal (sanity-check variable)
+    "B25118_014E",   # Renter-occupied: subtotal
     "B25118_015E",   # Renter HH: less than $5,000
     "B25118_016E",   # Renter HH: $5,000 to $9,999
     "B25118_017E",   # Renter HH: $10,000 to $14,999
@@ -193,9 +217,21 @@ ACS_BG_DEFAULT_VARS: Final[list[str]] = [
     "B25064_001E",   # Median gross rent (dollars)
     "B25071_001E",   # Median gross rent as percentage of household income
 
-    # Age of householder (B25007, renter section)
+    # Age of householder (B25007 — owner section)
     "B25007_001E",   # Tenure by age: table total
-    "B25007_012E",   # Renter-occupied: subtotal (sanity-check variable)
+    "B25007_002E",   # Owner-occupied: subtotal
+    "B25007_003E",   # Owner: householder 15 to 24 years
+    "B25007_004E",   # Owner: householder 25 to 34 years
+    "B25007_005E",   # Owner: householder 35 to 44 years
+    "B25007_006E",   # Owner: householder 45 to 54 years
+    "B25007_007E",   # Owner: householder 55 to 59 years
+    "B25007_008E",   # Owner: householder 60 to 64 years
+    "B25007_009E",   # Owner: householder 65 to 74 years
+    "B25007_010E",   # Owner: householder 75 to 84 years
+    "B25007_011E",   # Owner: householder 85 years and over
+
+    # Age of householder (B25007 — renter section)
+    "B25007_012E",   # Renter-occupied: subtotal
     "B25007_013E",   # Renter: householder 15 to 24 years
     "B25007_014E",   # Renter: householder 25 to 34 years
     "B25007_015E",   # Renter: householder 35 to 44 years
@@ -206,7 +242,26 @@ ACS_BG_DEFAULT_VARS: Final[list[str]] = [
     "B25007_020E",   # Renter: householder 75 to 84 years
     "B25007_021E",   # Renter: householder 85 years and over
 
-    # Owner-side comparison values (rent vs own context)
+    # Household size (B25009 — full table; both tenures)
+    "B25009_001E",   # Total occupied housing units
+    "B25009_002E",   # Owner-occupied: subtotal
+    "B25009_003E",   # Owner: 1-person household
+    "B25009_004E",   # Owner: 2-person household
+    "B25009_005E",   # Owner: 3-person household
+    "B25009_006E",   # Owner: 4-person household
+    "B25009_007E",   # Owner: 5-person household
+    "B25009_008E",   # Owner: 6-person household
+    "B25009_009E",   # Owner: 7-or-more person household
+    "B25009_010E",   # Renter-occupied: subtotal
+    "B25009_011E",   # Renter: 1-person household
+    "B25009_012E",   # Renter: 2-person household
+    "B25009_013E",   # Renter: 3-person household
+    "B25009_014E",   # Renter: 4-person household
+    "B25009_015E",   # Renter: 5-person household
+    "B25009_016E",   # Renter: 6-person household
+    "B25009_017E",   # Renter: 7-or-more person household
+
+    # Owner-side housing-cost context
     "B25077_001E",   # Median home value (dollars), owner-occupied
     "B25088_002E",   # Median monthly owner costs, housing units with a mortgage
 
