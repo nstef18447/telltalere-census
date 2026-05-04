@@ -123,6 +123,91 @@ The same primitives ported from Core_BTR's BTR pipeline produce
 **byte-identical output** to that pipeline (verified across 160 Lake
 County tracts × 3 dimensions in `tests/test_core_btr_parity.py`).
 
+## Renter + owner side-by-side (session 4)
+
+The session 3 primitives are tenure-agnostic; session 4 ships the ACS
+variables needed to compute owner-side marginals out of the box.
+Owner subtotals + brackets are present in `ACS_BG_DEFAULT_VARS` for
+B25118 (income), B25007 (age), and B25009 (HH size). The same primitive
+functions handle both tenures — only the `BracketConfig` changes:
+
+```python
+# Renter side: B25118_014E subtotal, B25118_015E..025E brackets
+renter_income_marginal = compute_tract_marginal(tract_row, RENTER_INCOME_CONFIG)
+renter_total = read_authoritative_total(tract_row, "B25003_003E")
+
+# Owner side: B25118_002E subtotal, B25118_003E..013E brackets
+owner_income_marginal = compute_tract_marginal(tract_row, OWNER_INCOME_CONFIG)
+owner_total = read_authoritative_total(tract_row, "B25003_002E")
+
+# PUMA joint, same dimensions, filter by tenure
+renter_joint = compute_puma_joint(
+    pre_binned, dimensions=["income_bin", "age_bin"],
+    filter_func=lambda d: d["TEN"].isin([3, 4]),
+)
+owner_joint = compute_puma_joint(
+    pre_binned, dimensions=["income_bin", "age_bin"],
+    filter_func=lambda d: d["TEN"].isin([1, 2]),
+)
+```
+
+## $150k+ tail decomposition (session 4)
+
+ACS publishes the high-income bracket as open-ended. PUMS continuous
+`HINCP` lets us split it into $150-250k / $250-350k / $350-500k / $500k+
+at the PUMA, then apply the shares to a tract crosstab. Per-other-column
+allocation preserves the rake's column-sum invariant.
+
+```python
+from telltalere_census import (
+    decompose_high_income_tail,
+    apply_tail_decomposition_to_crosstab,
+)
+
+# Decompose at PUMA level
+tail = decompose_high_income_tail(
+    pums_records, tenure_filter=lambda d: d["TEN"].isin([3, 4]),
+)
+# tail["shares"] = {"150_250k": 0.55, "250_350k": 0.25, "350_500k": 0.12, "500k_plus": 0.08}
+# tail["low_sample_flag"] = False    # n_unweighted_above_threshold >= 50
+
+# Apply to a tract crosstab (e.g. raked income x age)
+decomposed = apply_tail_decomposition_to_crosstab(
+    raked_crosstab, tail["shares"], top_bracket_label="150k_plus",
+)
+```
+
+The 1-D variant `apply_tail_decomposition` takes a marginal dict if
+you only need the income marginal split.
+
+## Lifestage rollup (session 4)
+
+Configurable cell-grid mapping `(age_bin, income_bin)` pairs to
+lifestage labels. Default is the v1 age-only RCLCO 5-bucket scheme;
+consumers pass any grid:
+
+```python
+from telltalere_census import (
+    aggregate_to_lifestages_with_tail,
+    RCLCO_DEFAULT_LIFESTAGE_GRID,
+)
+
+lifestages = aggregate_to_lifestages_with_tail(
+    decomposed_crosstab,
+    RCLCO_DEFAULT_LIFESTAGE_GRID,
+    tail_treatment="roll_up",     # collapse 150k_plus sub-brackets first
+)
+# lifestages = {
+#     "Post-Grad": 850, "Young Professional": 4200, "Family": 12000,
+#     "Mature Professional": 6800, "Empty Nester": 9500,
+# }
+```
+
+`aggregate_to_lifestages` raises `KeyError` (not silently drops) on
+cells the grid doesn't map. This catches bin-scheme drift early — adding
+a new bin to your ACS rollup but forgetting to extend the grid fails
+loudly instead of silently dropping data.
+
 ## Geometry: tract polygons + tract-to-PUMA crosswalk
 
 ```python

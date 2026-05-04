@@ -15,7 +15,20 @@ from .geometry import (
     load_tract_to_puma_crosswalk,
     wkb_to_geojson,
 )
+from .income_tail import (
+    DEFAULT_HIGH_INCOME_SUB_BRACKETS,
+    TailDecomposition,
+    apply_tail_decomposition,
+    apply_tail_decomposition_to_crosstab,
+    decompose_high_income_tail,
+)
 from .ipf import IpfResult, rake_to_marginals
+from .lifestage import (
+    RCLCO_DEFAULT_LIFESTAGE_GRID,
+    LifestageGrid,
+    aggregate_to_lifestages,
+    aggregate_to_lifestages_with_tail,
+)
 from .puma_crosstab import (
     column_major_to_joint,
     compute_puma_joint,
@@ -30,11 +43,20 @@ from .tract_marginals import (
 
 __all__ = [
     "BracketConfig",
+    "DEFAULT_HIGH_INCOME_SUB_BRACKETS",
     "IpfResult",
+    "LifestageGrid",
+    "RCLCO_DEFAULT_LIFESTAGE_GRID",
+    "TailDecomposition",
+    "aggregate_to_lifestages",
+    "aggregate_to_lifestages_with_tail",
+    "apply_tail_decomposition",
+    "apply_tail_decomposition_to_crosstab",
     "bin_acs_row",
     "column_major_to_joint",
     "compute_puma_joint",
     "compute_tract_marginal",
+    "decompose_high_income_tail",
     "download_tract_polygons",
     "joint_to_column_major",
     "load_tract_polygons",

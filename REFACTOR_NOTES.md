@@ -6,6 +6,58 @@ standalone package consumed via editable install.
 Date captured: 2026-04-19 (session 1).
 Updated: 2026-04-19 (session 2 — `bg_fetch` replaced by `acs_fetch`).
 Updated: 2026-05-03 (session 3 — Core_BTR primitives port).
+Updated: 2026-05-04 (session 4 — owner side, $150k+ tail, lifestage).
+
+## Session 4 — Owner support, tail decomposition, lifestage rollup (2026-05-04)
+
+Extends session 3's tract-synthesis primitives with owner ACS variables,
+PUMS-driven $150k+ tail decomposition, and a configurable lifestage
+rollup. Full session details in `docs/sessions/4_owner_tail_lifestage.md`.
+
+| Module / file | Change |
+| --- | --- |
+| `variables.py` | `ACS_BG_DEFAULT_VARS` extended 45 → 85 estimate vars: owner B25118 (`_002E`, `_003E.._013E`), owner B25007 (`_002E`, `_003E.._011E`), full B25009 table including the renter brackets that previously lived only in Core_BTR's pipeline. |
+| `income_tail.py` (new) | `decompose_high_income_tail`, `apply_tail_decomposition`, `apply_tail_decomposition_to_crosstab`, `DEFAULT_HIGH_INCOME_SUB_BRACKETS`, `TailDecomposition`. Tenure-agnostic; per-other-column rounding policy preserves the rake's column-sum invariant. |
+| `lifestage.py` (new) | `LifestageGrid`, `RCLCO_DEFAULT_LIFESTAGE_GRID`, `aggregate_to_lifestages` (KeyError on unmapped cell), `aggregate_to_lifestages_with_tail` (roll_up + split modes). |
+| `tests/_btr_configs.py` (new) | Test-internal renter + owner BracketConfigs and scalar PUMS binners. NOT a public surface. |
+| `tests/test_e2e_lake_county_demand.py` (new) | End-to-end integration with synthetic-PUMS (always runs) + live-PUMS (auto-skip) variants. Asserts marginal-sum, column-sum, tail-preservation, and lifestage-total invariants. |
+| `tests/test_income_tail.py` + `tests/test_lifestage.py` (new) | 36 unit tests across the two new modules. |
+| `__init__.py` | New public surface re-exported. |
+| `scripts/generate_lake_county_fixtures.py` | Drop now-redundant `B25009_RENTER_VARS` append. Document tenure model (single tract + single PUMS fixture, consumers filter via TEN). |
+
+**Session 3 byte-identity gate preserved.** Deliberately did not retrofit
+`authoritative_total_var` onto `compute_tract_marginal` (which my session
+3 implementation does not accept; the session 4 spec language was
+outdated relative to session 3's shipped surface). The e2e test uses
+`read_authoritative_total(row, "B25003_002E")` as a separate invariant
+check, not as a function argument. Marion benchmark + 10 byte-identity
+parity tests remain green; both auto-skipped live-PUMS gates also still
+auto-skipped (Census PUMS endpoint outage continues).
+
+**ACS cache invalidation cost.** Adding owner brackets + B25009 to
+defaults is a one-time merge-union re-fetch per cold state in any
+consumer's runtime cache (~3-4 minutes per state). Documented in the
+session doc. Verified end-to-end on Lake County: 4-chunk fetch at 170
+vars total, 160 tract rows captured, both cross-table invariants exact
+(`B25003_002 + _003 == _001` and `sum(owner B25118 brackets) == _002E`).
+
+**`tests/_btr_configs.py` rationale.** Hand-constructed test-only
+helper rather than a `telltalere_census.testing.btr_fixtures` public
+submodule. Three reasons (committed verbatim from the session 4
+read-back): (a) BTR-flavored configs would leak BTR concepts into the
+package boundary even under a `testing/` subpath, (b) we have one
+consumer using this scheme today and one prospective (the demographics
+inspector) — until a second consumer actually needs the same configs,
+we don't know which slice generalizes, (c) the parity test already
+imports BTR's configs directly via `sys.path` for byte-identity
+verification, and that pattern works. Revisit if the inspector exposes
+real second-consumer requirements.
+
+**Census PUMS API outage continuing from session 3.** All four
+PUMS-conditional tests in the suite (3 from session 4, 1 from session
+3) auto-skip. Re-running `scripts/generate_lake_county_fixtures.py`
+once the endpoint recovers re-activates all four. Synthetic e2e test
+passes every invariant in the meantime.
 
 ## Session 3 — Core_BTR primitives port (2026-05-03)
 
