@@ -1,15 +1,26 @@
 """
-Generate Lake County, IL fixtures for the Core_BTR parity tests.
+Generate Lake County, IL fixtures for the parity / e2e tests.
 
 Run once to capture:
   - tests/fixtures/lake_county_tracts.parquet — Lake County tract rows
-    from a 2024 ACS5 fetch with the BTR variable list (ACS_BG_DEFAULT_VARS
-    plus B25009 renter HH-size codes). Only Lake County rows kept.
+    from a 2024 ACS5 fetch with `ACS_BG_DEFAULT_VARS`. Lake County rows
+    only. As of session 4 the default variable list covers both renter
+    and owner B25118/B25007/B25009 brackets, so a single tract fixture
+    serves both tenures — consumers select a tenure via authoritative
+    total (B25003_002E for owner, B25003_003E for renter) and the
+    appropriate BracketConfig.
   - tests/fixtures/lake_county_pums.parquet — full Lake County PUMS
     records joined H+P (output of fetch_pums_data) for the PUMAs that
-    overlap Lake County.
+    overlap Lake County. Both tenures present in one file; consumers
+    filter via `df["TEN"].isin([1, 2])` for owners or `[3, 4]` for
+    renters. Splitting into separate owner/renter files would duplicate
+    data and add maintenance burden — the package's design pushes
+    tenure filtering to the call site already.
 
-Idempotent: if fixtures exist, exits without re-fetching.
+Idempotent: if fixtures exist, exits without re-fetching. Delete the
+fixture files (and the corresponding `data/acs5_*` runtime cache) to
+force a re-fetch — useful when `ACS_BG_DEFAULT_VARS` has changed and
+the cached snapshot is missing new columns.
 
 Run from repo root:
     python scripts/generate_lake_county_fixtures.py
@@ -38,11 +49,6 @@ COUNTY_FIPS = "097"
 ACS_VINTAGE = 2024
 ACS_TYPE = "acs5"
 
-# Match Core_BTR's pipeline.py:74-75 variable list so the parity tests
-# operate on the same column set Core_BTR's pipeline sees in production.
-B25009_RENTER_VARS = [f"B25009_{n:03d}E" for n in (10, 11, 12, 13, 14, 15, 16, 17)]
-ACS_BTR_VARS = list(ACS_BG_DEFAULT_VARS) + B25009_RENTER_VARS
-
 FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures"
 TRACT_FIXTURE = FIXTURE_DIR / "lake_county_tracts.parquet"
 PUMS_FIXTURE = FIXTURE_DIR / "lake_county_pums.parquet"
@@ -63,7 +69,7 @@ def main() -> int:
         print(f"Fetching tract-level ACS5 {ACS_VINTAGE} for state {STATE_FIPS}...")
         df = fetch_acs_data(
             state_fips=STATE_FIPS,
-            variables=ACS_BTR_VARS,
+            variables=ACS_BG_DEFAULT_VARS,
             geography="tract",
             vintage=ACS_VINTAGE,
             acs_type=ACS_TYPE,
