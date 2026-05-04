@@ -32,6 +32,12 @@ Then `pip install -r requirements.txt`.
 | `derived_fields` | Domain-neutral derived columns: cost burden, age cohort, tenure, structure type, building era, bedroom tier, household type, MV-based buckets, education, employment, poverty flags, etc. |
 | `variables` | PUMS / ACS5 variable code constants, whitelists, and bucketing lookups |
 | `cache` | Parquet cache conventions (filename scheme, vintage handling) |
+| `binning` | Generic ACS bracket-cell → display-bin rollup mechanism (the dictionaries themselves stay in consumer projects) |
+| `bracket_allocation` | Proportional reallocation of ACS bracketed counts onto a target interval (open-ended top bracket aware) |
+| `tract_marginals` | Tenure-/bin-agnostic tract or block-group marginal computation, plus subtotal MOE flag helper |
+| `puma_crosstab` | Pre-binned PUMS aggregation along arbitrary dimensions, with adapters to/from the column-major dict shape consumed by `ipf` |
+| `ipf` | 2-D iterative proportional fitting (matrix raking) — rake a PUMS-derived joint to ACS marginals to synthesize tract-level joints |
+| `geometry` | Tract polygon + tract-to-PUMA crosswalk loaders. Crosswalk ships in wheel; polygons are runtime-downloaded per state via `download_tract_polygons` |
 
 ## Variable whitelist pattern
 
@@ -70,6 +76,91 @@ To invalidate a cached file, delete it from disk and re-run.
 
 `CENSUS_API_KEY` — optional. Recommended for >500 queries/day. Read lazily by
 fetch functions; never validated at import time.
+
+## Tract-level synthesis primitives (session 3)
+
+The package ships generic, tenure-agnostic primitives for synthesizing
+tract-level joint distributions from PUMA-level PUMS priors and tract-level
+ACS marginals. Composition for the typical "renter income × age" use case:
+
+```python
+from telltalere_census import (
+    BracketConfig, compute_tract_marginal,
+    compute_puma_joint, joint_to_column_major,
+    rake_to_marginals,
+)
+
+# 1. Roll up ACS bracket cells into tract-level display bins
+income_cfg = BracketConfig(
+    denominator_var="B25118_014E",                    # renter-income subtotal
+    bracket_to_bin={"B25118_015E": "under_35k", ...}, # consumer-supplied
+    bin_order=["under_35k", "35_50k", ..., "150k_plus"],
+)
+income_marginal = compute_tract_marginal(tract_row, income_cfg)
+age_marginal    = compute_tract_marginal(tract_row, age_cfg)
+
+# 2. PUMA-level joint from PUMS (caller pre-bins + supplies tenure filter)
+joint_df = compute_puma_joint(
+    pre_binned_pums_df,
+    dimensions=["income_bin", "age_bin"],
+    filter_func=lambda d: d["TEN"].isin([3, 4]),  # renters
+)
+prior = joint_to_column_major(
+    joint_df, row_dim="income_bin", col_dim="age_bin",
+    row_order=INCOME_BINS, col_order=AGE_BINS,
+)
+
+# 3. Rake the PUMA prior to the tract marginals
+result = rake_to_marginals(prior, income_marginal, age_marginal)
+synthesized_joint = result["joint"]    # column-major dict
+```
+
+All primitives are tenure-/bin-agnostic — the bracket configurations,
+bin schemes, and tenure filters live in consumer projects. The package
+supplies the mechanism only.
+
+The same primitives ported from Core_BTR's BTR pipeline produce
+**byte-identical output** to that pipeline (verified across 160 Lake
+County tracts × 3 dimensions in `tests/test_core_btr_parity.py`).
+
+## Geometry: tract polygons + tract-to-PUMA crosswalk
+
+```python
+from telltalere_census import (
+    load_tract_to_puma_crosswalk,
+    load_tract_polygons,
+    download_tract_polygons,
+    wkb_to_geojson,
+    load_tract_polygons_as_gdf,    # requires [geo] extra
+)
+
+# Crosswalk ships in the wheel — zero-cost load
+xwalk = load_tract_to_puma_crosswalk(state_fips="17")
+
+# Polygons do NOT ship in the wheel — fetch on demand into a user cache
+download_tract_polygons(state_fips=["17", "18"])
+polygons = load_tract_polygons(state_fips="17")
+geojson = wkb_to_geojson(polygons["polygon_wkb"].iloc[0])
+```
+
+Polygons come from the TIGERweb 1:500k generalized boundaries, with
+`shapely.simplify(0.0005)` applied at build time. Per-state parquet
+files are uploaded as GitHub release assets and downloaded on demand.
+
+Cache resolution for downloaded polygons:
+1. explicit `cache_dir` argument
+2. `TELLTALERE_CENSUS_GEOMETRY_CACHE` env var
+3. `platformdirs.user_cache_dir("telltalere_census") / "geometry"`
+
+Release URL configuration (set once after the GitHub release is
+published):
+- `TELLTALERE_CENSUS_RELEASE_OWNER` (default placeholder)
+- `TELLTALERE_CENSUS_RELEASE_TAG`   (default `v{__version__}`)
+
+For GeoDataFrame loading, install the `[geo]` extra:
+```
+pip install telltalere-census[geo]
+```
 
 ## Known gotchas
 

@@ -5,6 +5,71 @@ standalone package consumed via editable install.
 
 Date captured: 2026-04-19 (session 1).
 Updated: 2026-04-19 (session 2 — `bg_fetch` replaced by `acs_fetch`).
+Updated: 2026-05-03 (session 3 — Core_BTR primitives port).
+
+## Session 3 — Core_BTR primitives port (2026-05-03)
+
+Lifted six generic Census-processing primitives out of `Core_BTR` into
+`telltalere-census` so other consumers (a near-term demographics
+inspector frontend, future client engagements) can use them without
+depending on Core_BTR. **Core_BTR was not modified** — `git status` in
+`C:\Users\ndste\Core_BTR` shows zero source changes after this session.
+Pre-existing dirty files (`SHELL_PROMPT.md`, batch outputs) were
+untouched by this session and remain in their prior state.
+
+Full session details in `docs/sessions/3_port_primitives.md`. Summary
+of what shipped:
+
+| Module | Purpose | Bytes-identical with Core_BTR? |
+| --- | --- | --- |
+| `binning.py` | `bin_acs_row` mechanism | yes (verbatim) |
+| `bracket_allocation.py` | `proportional_from_brackets` | yes (verbatim) |
+| `tract_marginals.py` | `compute_tract_marginal`, `subtotal_moe_flagged` | yes (160 Lake County tracts × 3 dims) |
+| `ipf.py` | `rake_to_marginals` | yes (synthetic + 50 real Lake County marginals) |
+| `puma_crosstab.py` | `compute_puma_joint`, `joint_to_column_major`, `column_major_to_joint` | yes (synthetic PUMS) |
+| `geometry.py` | tract polygon + crosswalk loaders, downloader | new — no parity reference |
+
+Plus two build scripts (`scripts/build_tract_puma_crosswalk.py`,
+`scripts/build_tract_polygons.py`), the in-wheel crosswalk parquet
+(`telltalere_census/data/tract_to_puma_2020.parquet` — 861 KB),
+fixture generator (`scripts/generate_lake_county_fixtures.py`), and
+the parity test (`tests/test_core_btr_parity.py`).
+
+**Core_BTR/package duplication.** Both repos now contain implementations
+of the same logic (Core_BTR's `_bin_acs_row` and the package's
+`bin_acs_row`, etc.). Core_BTR is intentionally unchanged; collapsing
+the duplication into a single source of truth is a future cleanup once
+Core_BTR's BTR-specific consumers can switch to the package without
+risk to its active client engagement.
+
+**Census PUMS API outage** during this session blocked capture of a
+live Lake County PUMS fixture for the byte-identity parity test. The
+test (`test_puma_crosstab_byte_identical_live_pums`) is wired and
+auto-activates when `tests/fixtures/lake_county_pums.parquet` appears.
+Tract-level live data was captured (ACS5 endpoint was healthy) and
+the tract-level parity tests cover all 160 Lake County tracts × 3
+dimensions byte-identically.
+
+**`compute_puma_joint` opt-in zero-fill (`bin_orders` parameter)**.
+By default `compute_puma_joint` emits only observed (dim, dim) cells —
+matches Core_BTR's `_weighted_pivot` pre-adapter shape. The IPF flow
+zero-fills downstream via `joint_to_column_major`. With `bin_orders`
+the result is reindexed to the cartesian product of declared bin
+orders, useful for consumers that want a complete DataFrame without
+going through the IPF adapter.
+
+**Geometry distribution**: tract polygons do NOT ship in the wheel
+(would push it past 25 MB even after `shapely.simplify(0.0005)`). Per-
+state parquets are built by `scripts/build_tract_polygons.py` to
+`build/`, then uploaded as GitHub release assets. The runtime helper
+`download_tract_polygons` fetches them on demand into a
+platformdirs-based user cache. Wheel stays small (~1 MB total package
+data: just the crosswalk + the existing `puma_county_weights.parquet`).
+
+Release URL configuration is parameterized via env vars
+(`TELLTALERE_CENSUS_RELEASE_OWNER`, `TELLTALERE_CENSUS_RELEASE_TAG`),
+default placeholders. Operator sets these once after publishing the
+release.
 
 ## Session 2 — `acs_fetch` implementation (2026-04-19)
 
