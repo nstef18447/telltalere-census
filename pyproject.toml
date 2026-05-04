@@ -15,10 +15,13 @@ dependencies = [
     "pandas",
     "requests",
     "pyarrow",
+    "platformdirs",
+    "shapely",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest"]
+geo = ["geopandas"]
 
 [tool.setuptools]
 packages = ["telltalere_census"]
