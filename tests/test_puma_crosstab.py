@@ -144,6 +144,97 @@ def test_dimensions_required():
         compute_puma_joint(df, dimensions=[])
 
 
+# --- bin_orders zero-fill ---
+
+def test_bin_orders_zero_fills_missing_combinations():
+    # 2 records, both in (low, young). Other combinations of {low, high} x
+    # {young, old} must appear as weight=0.
+    df = pd.DataFrame([
+        {"income_bin": "low", "age_bin": "young", "WGTP": 10},
+        {"income_bin": "low", "age_bin": "young", "WGTP": 20},
+    ])
+    out = compute_puma_joint(
+        df, dimensions=["income_bin", "age_bin"],
+        bin_orders={"income_bin": ["low", "high"], "age_bin": ["young", "old"]},
+    )
+    assert len(out) == 4
+    assert out.loc[("low",  "young"), "weight"] == 30
+    assert out.loc[("low",  "old"),   "weight"] == 0
+    assert out.loc[("high", "young"), "weight"] == 0
+    assert out.loc[("high", "old"),   "weight"] == 0
+    # Index follows the declared bin order
+    assert list(out.index) == [
+        ("low", "young"), ("low", "old"),
+        ("high", "young"), ("high", "old"),
+    ]
+
+
+def test_bin_orders_with_extra_unobserved_bin():
+    # Declare a 3rd income bin that has zero records — it must still
+    # appear as weight=0 across every age bin.
+    df = pd.DataFrame([
+        {"income_bin": "low",  "age_bin": "young", "WGTP": 10},
+        {"income_bin": "high", "age_bin": "old",   "WGTP": 30},
+    ])
+    out = compute_puma_joint(
+        df, dimensions=["income_bin", "age_bin"],
+        bin_orders={
+            "income_bin": ["low", "mid", "high"],
+            "age_bin": ["young", "old"],
+        },
+    )
+    assert len(out) == 6
+    assert out.loc[("mid", "young"), "weight"] == 0
+    assert out.loc[("mid", "old"),   "weight"] == 0
+    assert out.loc[("low",  "young"), "weight"] == 10
+    assert out.loc[("high", "old"),   "weight"] == 30
+
+
+def test_bin_orders_1d_zero_fill():
+    df = pd.DataFrame([{"income_bin": "low", "WGTP": 50}])
+    out = compute_puma_joint(
+        df, dimensions=["income_bin"],
+        bin_orders={"income_bin": ["low", "mid", "high"]},
+    )
+    assert len(out) == 3
+    assert out.loc["low",  "weight"] == 50
+    assert out.loc["mid",  "weight"] == 0
+    assert out.loc["high", "weight"] == 0
+
+
+def test_bin_orders_zero_fill_on_empty_filter():
+    # Filter excludes everything, but bin_orders demands a fully-populated
+    # output of zeros.
+    df = pd.DataFrame([
+        {"income_bin": "low", "age_bin": "young", "WGTP": 10, "TEN": 1},
+    ])
+    out = compute_puma_joint(
+        df, dimensions=["income_bin", "age_bin"],
+        filter_func=lambda d: d["TEN"] == 99,
+        bin_orders={"income_bin": ["low", "high"], "age_bin": ["young", "old"]},
+    )
+    assert len(out) == 4
+    assert (out["weight"] == 0).all()
+
+
+def test_bin_orders_unknown_dimension_raises():
+    df = pd.DataFrame([{"income_bin": "low", "WGTP": 10}])
+    with pytest.raises(ValueError, match="not in dimensions"):
+        compute_puma_joint(
+            df, dimensions=["income_bin"],
+            bin_orders={"age_bin": ["young", "old"]},
+        )
+
+
+def test_bin_orders_dtype_remains_int64():
+    df = pd.DataFrame([{"income_bin": "low", "age_bin": "young", "WGTP": 5}])
+    out = compute_puma_joint(
+        df, dimensions=["income_bin", "age_bin"],
+        bin_orders={"income_bin": ["low", "high"], "age_bin": ["young", "old"]},
+    )
+    assert out["weight"].dtype == "int64"
+
+
 # --- adapters ---
 
 def test_joint_to_column_major_zero_fills():
