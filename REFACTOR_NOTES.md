@@ -7,6 +7,100 @@ Date captured: 2026-04-19 (session 1).
 Updated: 2026-04-19 (session 2 — `bg_fetch` replaced by `acs_fetch`).
 Updated: 2026-05-03 (session 3 — Core_BTR primitives port).
 Updated: 2026-05-04 (session 4 — owner side, $150k+ tail, lifestage).
+Updated: 2026-05-04 (session 5 — multi-vintage, trends, boundary harmonization).
+
+## Session 5 — Multi-vintage, trends, boundary harmonization (2026-05-04)
+
+Adds the time dimension to the package. Three new modules + a runtime-
+download GitHub-release asset for the boundary crosswalk. Full session
+details in `docs/sessions/5_multi_vintage_trends_boundaries.md`.
+
+| Module / file | Change |
+| --- | --- |
+| `variables.py` | `B01003_001E` (total population) added to defaults. 85 → 86 estimate vars; MOE auto-pairing brings total to 172 (4 chunks at 50/50/50/22). |
+| `multi_vintage.py` (new) | `fetch_acs_data_multi_vintage`, `get_available_vintages`. Thin wrapper over single-vintage path; vintages validated before fetch. |
+| `trends.py` (new) | `compute_trend_metrics`, `cagr`, `is_change_significant`, `cumulative_trend`, `TrendResult`. Pure-function; MOE-aware significance with both Census-recommended combined-MOE and CI-overlap methods. |
+| `boundaries.py` (new) | `get_boundary_vintage_for_acs`, `download/load_tract_boundary_crosswalk`, `harmonize_to_2020_boundaries`. Three NA modes (propagate / zero / renormalize). |
+| `scripts/build_tract_boundary_crosswalk.py` (new) | Downloads Census's 18 MB national pipe-delimited tract relationship file; outputs 4.80 MB snappy parquet (126,450 rows, 85,528 unique 2020 tracts) to `build/`. |
+| `tests/test_multi_vintage.py` (new, 18 tests) | Mocked single-vintage path, vintage validation, ACS1/ACS5 availability. |
+| `tests/test_trends.py` (new, 36 tests) | Hand-computable cases, edge cases, combined-vs-overlap divergence, all TrendResult fields. |
+| `tests/test_boundaries.py` (new, 32 tests) | Cutover dates, schema, all three NA modes incl. 3-contributor renormalize, real-data Lake County preservation. |
+| `tests/test_e2e_lake_county_trends.py` (new, 7 tests) | Real 2018 + 2023 5-year fetch, trend on stable tract, MOE significance, harmonization round-trip. |
+| `__init__.py` | 11 new public exports. Total public surface: 36 names. |
+
+**Honest naming on weights.** The boundary crosswalk uses `area_weight_2010` /
+`area_weight_2020` rather than the brief's spec'd `population_weight_*`.
+Reason: Census's relationship file (`tab20_tract20_tract10_natl.txt`)
+contains AREALAND intersection areas, not population. Population-
+weighted allocation would require joining 2020 P.L. 94-171 block
+populations to the intersection geometries; significant scope expansion
+documented as future work. The area-weight approximation is standard
+in tract-harmonization research and accurate when populations are
+roughly uniform within boundary changes.
+
+**Failure mode caveat documented prominently.** Area-weighting
+systematically *understates* growth in greenfield-development tracts
+(Sun Belt corridors, exurban expansion, brownfield-to-residential)
+where the 2010 source-tract population was concentrated only in the
+already-developed portion. It also fails on tracts split along
+zoning/physical boundaries (residential vs. non-residential halves).
+Failure is asymmetric and direction-dependent. Documented in
+`harmonize_to_2020_boundaries` docstring under "When this assumption
+breaks". Consumers in growth markets should treat tract-level cross-
+decade comparisons cautiously and prefer county/MSA aggregation when
+the question tolerates coarser geography.
+
+**Boundary crosswalk distribution.** Mirrors session 3's tract-polygon
+runtime-download pattern. Single 4.80 MB national parquet, NOT in
+wheel; uploaded as a GitHub release asset under a separate tag
+(`boundaries-v1`, decoupled from package version since Census re-
+releases the crosswalk approximately once per decade). Cache resolves
+via `TELLTALERE_CENSUS_BOUNDARY_CACHE` env var or
+`platformdirs.user_cache_dir/'boundaries'`.
+
+**Tract / BG boundary cutover (verified against
+geography-boundaries-by-year.{YYYY}.html for 2019 / 2020 / 2021 / 2022 /
+2023 / 2024 on 2026-05-04):**
+- ACS5: end-year ≤ 2019 uses 2010 boundaries; end-year ≥ 2020 uses 2020.
+- ACS1: end-year ≤ 2019 uses 2010 boundaries; end-year ≥ 2021 uses 2020
+  (2020 1-year not published).
+- `get_boundary_vintage_for_acs` is scoped to tract/BG only. PUMAs,
+  Congressional Districts, and Urban Areas migrated on the 2022 1-year
+  schedule per Census user note 2023-02 — out of scope for this
+  function.
+
+**Inflation-comparability is documented, not solved.** Income-bracket
+and dollar-denominated variables across vintages are vintage-native
+nominal dollars. Documented prominently in `multi_vintage` and
+`trends` module docstrings + the README. Real-dollar harmonization
+explicitly out of scope as of v0.3.0; consumers apply CPI deflator at
+their own layer. Documented as future scope.
+
+**Census PUMS endpoint outage continuing from sessions 3 and 4.**
+Session 5 housekeeping retry (`scripts/generate_lake_county_fixtures.py`)
+also failed with HTTP 500. PUMS-conditional tests remain skipped (3 from
+session 4 + 1 from session 3). Session 5's new modules don't depend on
+PUMS — ACS5 summary tables are healthy.
+
+**Marion benchmark and session 3/4 byte-identity gates green.**
+54 regression tests pass. New session 5 tests: 36 + 18 + 32 + 7 = 93.
+Total suite: 147 passing, 3 skipped.
+
+### Carry-overs deferred to future sessions
+
+- **True population weights for boundary harmonization.** Join 2020
+  Census P.L. 94-171 block-level population data to the intersection
+  geometries in the build script. Eliminates the area-uniform-
+  population assumption. Significant scope expansion (~2-3 hours).
+- **Multi-vintage PUMS support.** PUMS variable definitions drift
+  across vintages; structurally different from ACS summary tables.
+- **CPI-adjusted real-dollar income comparison.** Apply BLS CPI-U-RS
+  series to bracket boundaries / median variables before trend
+  computation.
+- **B25034 year-built granularity.** Defaults include only the first
+  4 buckets (`_001E.._004E`); pre-2010 era detail (`_005E.._011E`) not
+  included. Out of session 5 scope; expand when a consumer needs
+  building-era trend at finer resolution.
 
 ## Session 4 — Owner support, tail decomposition, lifestage rollup (2026-05-04)
 

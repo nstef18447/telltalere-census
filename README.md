@@ -208,6 +208,115 @@ cells the grid doesn't map. This catches bin-scheme drift early — adding
 a new bin to your ACS rollup but forgetting to extend the grid fails
 loudly instead of silently dropping data.
 
+## Multi-vintage ACS fetch + trend computation (session 5)
+
+Fetch multiple ACS vintages in one call and compute trend metrics
+across them.
+
+```python
+from telltalere_census import (
+    fetch_acs_data_multi_vintage,
+    get_available_vintages,
+    compute_trend_metrics,
+    cumulative_trend,
+    is_change_significant,
+)
+
+# Multi-vintage fetch returns a long-format DataFrame with a 'vintage' column
+df = fetch_acs_data_multi_vintage(
+    state_fips="17",
+    variables=["B01003_001E"],
+    vintages=[2018, 2023],
+    geography="tract",
+    acs_type="acs5",
+)
+# df has rows for both vintages; cache reuses single-vintage parquets
+
+# Trend metrics for one tract over the two vintages
+tract_data = df[df["GEOID"] == "17097011001"]
+result = compute_trend_metrics(
+    values_by_vintage=dict(zip(tract_data["vintage"], tract_data["B01003_001E"])),
+    moes_by_vintage=dict(zip(tract_data["vintage"], tract_data["B01003_001M"])),
+)
+# result["direction"] in {"increasing", "decreasing", "flat", "noise"}
+# result["is_significant"] reflects MOE-aware significance
+```
+
+`get_available_vintages("tract", "acs5")` returns the hardcoded list of
+end-years available (2013–2024 as of 2026-05-04). Refresh annually as
+Census publishes new vintages.
+
+**Inflation caveat (read this).** Income-bracket variables (B25118,
+B19001, etc.) and dollar-denominated variables (B25064 median rent,
+B25077 median home value) across vintages are **vintage-native nominal
+dollars**. ACS does not adjust historical estimates for inflation; a
+"$100,000+" bracket in 2014-2018 represents different real purchasing
+power than the same nominal label in 2019-2023. Cross-vintage
+comparison of nominal income brackets is mathematically valid but
+economically misleading without a CPI deflator. This package does
+not ship CPI deflation — apply at your own layer (BLS CPI-U-RS series
+is the standard). Population counts, tenure counts, and bracket
+*shares* (computed as percent of row total) are unaffected.
+
+## Cross-decade comparisons: tract boundary harmonization (session 5)
+
+Tract / block-group boundaries differ between the 2010 and 2020 Census.
+ACS5 vintages with end-year ≤ 2019 use 2010 boundaries; ≥ 2020 use 2020.
+ACS1 same except 2020 wasn't published. To compare tract-level data
+across the cutover, harmonize the historical subset onto 2020
+boundaries first.
+
+```python
+from telltalere_census import (
+    download_tract_boundary_crosswalk,
+    get_boundary_vintage_for_acs,
+    harmonize_to_2020_boundaries,
+    fetch_acs_data_multi_vintage,
+)
+
+# One-time download (~5 MB): cached for repeated use
+download_tract_boundary_crosswalk()
+
+# Quick lookup
+get_boundary_vintage_for_acs(2018, "acs5")  # -> 2010
+get_boundary_vintage_for_acs(2023, "acs5")  # -> 2020
+
+# Harmonize 2018 5-year tract data onto 2020 boundaries before trend
+historical = fetch_acs_data_multi_vintage(
+    state_fips="17", vintages=[2018], geography="tract",
+    variables=["B01003_001E", "B25064_001E"],
+)
+harmonized = harmonize_to_2020_boundaries(
+    historical.rename(columns={"GEOID": "geoid"}),
+    count_columns=["B01003_001E"],
+    median_columns=["B25064_001E"],   # output NaN — medians can't harmonize
+    na_treatment="propagate",         # any NA contributor → NA (default, conservative)
+)
+# `harmonized` is keyed on 2020 tract GEOID and ready to compare with
+# 2023 ACS5 data on the same 2020 boundaries
+```
+
+**Area-weighted, not population-weighted.** Weights derive from Census's
+land-area-based tract relationship file; columns are
+`area_weight_2010` / `area_weight_2020`. **This systematically under-
+allocates growth in greenfield-development tracts** (Sun Belt corridors,
+exurban expansion, brownfield-to-residential conversions) — the 2020
+successor tract inherits a phantom 2010 baseline population from
+already-developed land that wasn't actually populated. Failure mode is
+asymmetric and direction-dependent. See
+`harmonize_to_2020_boundaries` docstring for the full discussion. For
+trend analysis in known growth markets, treat tract-level cross-decade
+comparisons cautiously — county / MSA aggregation is often the right
+move when the question can tolerate coarser geography.
+
+Three NA-handling modes for `harmonize_to_2020_boundaries`:
+- `"propagate"` (default): conservative; any 2020 tract with NA
+  contributor → NA. Loses data but never invents.
+- `"zero"`: NA → 0 contribution. Discouraged; creates spurious shrink
+  signal.
+- `"renormalize"`: drop NA contributors, renormalize surviving weights
+  per 2020-tract group. Aggressive; reuses partial info.
+
 ## Geometry: tract polygons + tract-to-PUMA crosswalk
 
 ```python
