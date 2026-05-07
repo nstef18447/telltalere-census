@@ -71,7 +71,7 @@ logger = logging.getLogger(__name__)
 # Release URL configuration
 # ---------------------------------------------------------------------------
 
-_DEFAULT_RELEASE_OWNER = "REPLACE_ME"
+_DEFAULT_RELEASE_OWNER = "nstef18447"
 _DEFAULT_BOUNDARY_RELEASE_TAG = "boundaries-v1"
 _ENV_RELEASE_OWNER = "TELLTALERE_CENSUS_RELEASE_OWNER"
 _ENV_BOUNDARY_RELEASE_TAG = "TELLTALERE_CENSUS_BOUNDARY_RELEASE_TAG"

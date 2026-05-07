@@ -48,7 +48,6 @@ from typing import Any, Iterable, Optional, Union
 import pandas as pd
 import requests
 
-from telltalere_census import __version__
 from telltalere_census.cache import package_data_path
 
 logger = logging.getLogger(__name__)
@@ -58,11 +57,17 @@ logger = logging.getLogger(__name__)
 # Release URL configuration
 # ---------------------------------------------------------------------------
 
-# Placeholder defaults — override via env vars once the GitHub release exists.
 # The build script writes per-state parquet files named tracts_{state_fips}.parquet
-# to a build/ directory; those are uploaded as release assets.
-_DEFAULT_RELEASE_OWNER = "REPLACE_ME"
-_DEFAULT_RELEASE_TAG = f"v{__version__}"
+# to a build/ directory; those are uploaded as release assets. Override the
+# owner/tag defaults via env vars to point at a fork or a different release.
+#
+# The release tag is decoupled from the package version: tract polygons update
+# only when TIGERweb refreshes the generalized boundaries (effectively decadal
+# cadence), so re-uploading the ~50 per-state parquets on every package version
+# bump would be wasteful and break wheel-installed callers' caches. Mirrors the
+# `boundaries-v1` decoupling in `boundaries.py`.
+_DEFAULT_RELEASE_OWNER = "nstef18447"
+_DEFAULT_RELEASE_TAG = "geometry-v1"
 _ENV_RELEASE_OWNER = "TELLTALERE_CENSUS_RELEASE_OWNER"
 _ENV_RELEASE_TAG = "TELLTALERE_CENSUS_RELEASE_TAG"
 _ENV_GEOMETRY_CACHE = "TELLTALERE_CENSUS_GEOMETRY_CACHE"
@@ -73,8 +78,8 @@ def _release_url(state_fips: str) -> str:
     Build the per-state polygon release-asset URL.
 
     Override the defaults via environment variables:
-      - TELLTALERE_CENSUS_RELEASE_OWNER  (default: 'REPLACE_ME')
-      - TELLTALERE_CENSUS_RELEASE_TAG    (default: 'v{__version__}')
+      - TELLTALERE_CENSUS_RELEASE_OWNER  (default: 'nstef18447')
+      - TELLTALERE_CENSUS_RELEASE_TAG    (default: 'geometry-v1')
     """
     owner = os.environ.get(_ENV_RELEASE_OWNER, _DEFAULT_RELEASE_OWNER)
     tag = os.environ.get(_ENV_RELEASE_TAG, _DEFAULT_RELEASE_TAG)

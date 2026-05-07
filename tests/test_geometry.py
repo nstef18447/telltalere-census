@@ -169,11 +169,11 @@ def test_release_url_uses_env_overrides(monkeypatch):
     )
 
 
-def test_release_url_default_uses_placeholder(monkeypatch):
+def test_release_url_default_uses_real_owner(monkeypatch):
     monkeypatch.delenv("TELLTALERE_CENSUS_RELEASE_OWNER", raising=False)
     monkeypatch.delenv("TELLTALERE_CENSUS_RELEASE_TAG", raising=False)
     url = _release_url("17")
-    assert "REPLACE_ME" in url
+    assert "nstef18447" in url
     assert "tracts_17.parquet" in url
 
 
@@ -209,8 +209,8 @@ def test_all_state_fips_includes_dc_and_pr():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.skipif(
-    os.environ.get("TELLTALERE_CENSUS_RELEASE_OWNER", "REPLACE_ME") == "REPLACE_ME",
-    reason="No real release configured; download_tract_polygons untestable.",
+    os.environ.get("SKIP_LIVE_NETWORK_TESTS") == "1",
+    reason="Live network test; set SKIP_LIVE_NETWORK_TESTS=1 to skip in CI or offline development.",
 )
 def test_download_tract_polygons_pulls_one_state(tmp_path: Path):
     paths = download_tract_polygons(state_fips="17", cache_dir=tmp_path)

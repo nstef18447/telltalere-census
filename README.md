@@ -346,10 +346,12 @@ Cache resolution for downloaded polygons:
 2. `TELLTALERE_CENSUS_GEOMETRY_CACHE` env var
 3. `platformdirs.user_cache_dir("telltalere_census") / "geometry"`
 
-Release URL configuration (set once after the GitHub release is
-published):
-- `TELLTALERE_CENSUS_RELEASE_OWNER` (default placeholder)
-- `TELLTALERE_CENSUS_RELEASE_TAG`   (default `v{__version__}`)
+Release URL configuration (override only to point at a fork or a
+different release):
+- `TELLTALERE_CENSUS_RELEASE_OWNER` (default `nstef18447`)
+- `TELLTALERE_CENSUS_RELEASE_TAG`   (default `geometry-v1`; decoupled from
+  package version because tract polygons re-publish on TIGER refresh
+  cadence, not on every package release)
 
 For GeoDataFrame loading, install the `[geo]` extra:
 ```
