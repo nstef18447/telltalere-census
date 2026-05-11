@@ -38,6 +38,9 @@ Then `pip install -r requirements.txt`.
 | `puma_crosstab` | Pre-binned PUMS aggregation along arbitrary dimensions, with adapters to/from the column-major dict shape consumed by `ipf` |
 | `ipf` | 2-D iterative proportional fitting (matrix raking) — rake a PUMS-derived joint to ACS marginals to synthesize tract-level joints |
 | `geometry` | Tract polygon + tract-to-PUMA crosswalk loaders. Crosswalk ships in wheel; polygons are runtime-downloaded per state via `download_tract_polygons` |
+| `warm_cache` | Bulk pre-fetcher for ACS detailed tables + data profiles across all states, vintages, and geographies. Writes to `~/.telltalere-census/cache/bulk/`. Reads are transparent to the public multi-vintage API |
+| `pums_bulk` | Direct PUMS ZIP download from Census FTP, converted to per-state parquet under `cache/bulk/pums/`. Parallel HTTP, no API rate limits |
+| `cli` | `telltalere-census` console script (`warm-cache`, `warm-pums` subcommands) |
 
 ## Variable whitelist pattern
 
@@ -76,6 +79,129 @@ To invalidate a cached file, delete it from disk and re-run.
 
 `CENSUS_API_KEY` — optional. Recommended for >500 queries/day. Read lazily by
 fetch functions; never validated at import time.
+
+## Bulk cache warming (session 6 / v0.4.0)
+
+The on-demand fetcher caches one parquet per `(state, vintage, geography)`
+the first time it's asked for that slice. That's fine for tight inspector
+loops, but cold-start workloads that touch many states and vintages spend
+most of their time on Census-API round-trips. `v0.4.0` adds a bulk
+warming layer that pre-fetches a comprehensive corpus into a local
+parquet repository. After warming, the public
+`fetch_acs_data_multi_vintage` transparently reads from the bulk cache
+and avoids the Census API on warm slices.
+
+### What gets warmed (default scope)
+
+| Dataset | Vintages | Geographies | States | Tables |
+| --- | --- | --- | --- | --- |
+| ACS 5-year | 8 (`2013-2017` … `2020-2024`) | 6 (`tract`, `puma`, `county`, `place`, `msa`, `zcta`) | 52 (50 + DC + PR) for state-bound; `00` for `msa` and `zcta` | 28 (24 B + 4 DP) |
+| ACS 1-year | 10 (2014..2024 excluding 2020) | 5 (`puma`, `county`, `place`, `state`, `msa`) | 52 for state-bound; `00` for `msa` | 28 |
+| PUMS | same 8 + 10 vintages | n/a | 52 | n/a — full microdata, both H and P records |
+
+Total ACS fetches (full warming, default scope): ≈ **94,250**, at the
+default 5 req/sec ceiling ⇒ ~5 hours. Total PUMS downloads: 1,872 ZIPs,
+bandwidth-bound; budget 4–8 hours. Combined wall-clock estimate:
+**9–13 hours**, depending on connection.
+
+The 5-year scope starts at end-year 2017 (not 2013) and the 1-year scope
+starts at 2014 to match the public-API contract enforced by
+`multi_vintage.get_available_vintages`. Older vintages can be requested
+via flags but the public multi-vintage reader will refuse them.
+
+Block group is **not** in the warm scope. BG queries continue to use the
+on-demand fetcher in `acs_fetch.fetch_acs_data`.
+
+### On-disk layout
+
+```
+~/.telltalere-census/cache/bulk/
+├── tract/2020-2024/B19001_17.parquet     # IL B19001 from ACS5 2020-2024
+├── county/2024/B25064_06.parquet         # CA B25064 from ACS1 2024
+├── msa/2020-2024/B01001_00.parquet       # nation-wide MSAs (no state filter)
+├── zcta/2020-2024/B01003_00.parquet      # nation-wide ZCTAs
+└── pums/2020-2024/h_17.parquet           # IL housing-unit microdata
+```
+
+Each ACS parquet contains the entire group response (`E`, `EA`, `M`, `MA`
+columns for B-tables; with `PE`/`PM` percentage columns for DP-tables)
+plus geography ID columns and a canonical `GEOID` for state-bound geos.
+
+Cache root resolution:
+1. Explicit `cache_dir` argument
+2. `TELLTALERE_CENSUS_BULK_CACHE_DIR` env var
+3. `~/.telltalere-census/cache/bulk/` (default)
+
+This is **distinct from the on-demand cache** (`./data/` or
+`TELLTALERE_CENSUS_CACHE_DIR`). Both coexist; the bulk cache is
+checked first by the public multi-vintage reader for `tract` slices.
+
+### CLI usage
+
+The package ships a `telltalere-census` console script with two
+subcommands:
+
+```bash
+# Preview the full warming plan without fetching:
+telltalere-census warm-cache --dry-run
+
+# Run the full warming (overnight background):
+telltalere-census warm-cache > warm.log 2>&1 &
+
+# Small targeted slice (e.g. one state, one vintage, two tables):
+telltalere-census warm-cache \
+  --vintages-5yr 2020-2024 --vintages-1yr 2024 \
+  --states 17 --tables B01001,B19001 \
+  --geographies-5yr tract --geographies-1yr state
+
+# Full PUMS warming (separate command, bandwidth-bound):
+telltalere-census warm-pums > pums.log 2>&1 &
+```
+
+All flags accept comma-separated lists. `--dry-run` is available on
+both subcommands.
+
+Failures (HTTP 429, 5xx, transient network errors) are retried with
+exponential backoff and jitter. Permanent failures (4xx) are logged
+and skipped. A second retry pass at the end of the run picks up
+anything that failed mid-run. Final results land in the warm log,
+default `~/.telltalere-census/cache/bulk/warm_log_{timestamp}.txt`.
+
+### Programmatic usage
+
+```python
+from telltalere_census import warm_cache, download_pums_bulk
+
+# Targeted warm:
+result = warm_cache(
+    vintages_5yr=["2020-2024"],
+    geographies_5yr=["tract"],
+    states=["17"],
+    tables=["B01001", "B19001"],
+)
+print(result)
+# WarmCacheResult(completed=2, skipped=0, failed=0, duration=1.4s)
+
+# After warming, the existing public API uses the bulk cache transparently:
+from telltalere_census import fetch_acs_data_multi_vintage
+df = fetch_acs_data_multi_vintage(
+    state_fips="17",
+    variables=["B01001_001E"],
+    vintages=[2024],
+    geography="tract",
+)  # reads from cache/bulk/tract/2020-2024/B01001_17.parquet — no API call
+```
+
+### Disk usage
+
+Rough estimates at full default scope:
+- ACS parquets: ~10–15 GB (varies by table; tract+ZCTA dominate)
+- PUMS parquets: ~25–35 GB (H+P, all states, all vintages)
+- **Total: ~35–50 GB**
+
+The warmer halts before starting if less than 20 GB (ACS) or 40 GB
+(PUMS) is free on the target device. Override with `--min-free-gb 0`
+on each subcommand if you've estimated headroom yourself.
 
 ## Tract-level synthesis primitives (session 3)
 

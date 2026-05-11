@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "telltalere-census"
-version = "0.3.0"
+version = "0.4.0"
 description = "Shared Census PUMS / ACS data layer for Telltale RE products."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,6 +22,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest"]
 geo = ["geopandas"]
+
+[project.scripts]
+telltalere-census = "telltalere_census.cli:main"
 
 [tool.setuptools]
 packages = ["telltalere_census"]

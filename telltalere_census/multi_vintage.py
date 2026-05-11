@@ -204,17 +204,99 @@ def fetch_acs_data_multi_vintage(
 
     frames: list[pd.DataFrame] = []
     for vintage in sorted(set(vintages)):
-        df = fetch_acs_data(
+        # Bulk-cache fast path: if a warm cache has the union of needed tables
+        # for this (state, vintage, geography), assemble the slice from parquets
+        # and skip the API entirely. Falls through on any miss.
+        df = _try_bulk_cache_read(
             state_fips=state_fips,
-            variables=requested_vars,
+            requested_vars=requested_vars,
             geography=geography,
             vintage=vintage,
             acs_type=acs_type,
             include_moe=include_moe,
-            cache_dir=cache_dir,
         )
+        if df is None:
+            df = fetch_acs_data(
+                state_fips=state_fips,
+                variables=requested_vars,
+                geography=geography,
+                vintage=vintage,
+                acs_type=acs_type,
+                include_moe=include_moe,
+                cache_dir=cache_dir,
+            )
         df = df.copy()
         df["vintage"] = int(vintage)
         frames.append(df)
 
     return pd.concat(frames, ignore_index=True)
+
+
+# ---------------------------------------------------------------------------
+# Bulk-cache fast path
+# ---------------------------------------------------------------------------
+
+def _try_bulk_cache_read(
+    state_fips: str,
+    requested_vars: list[str],
+    geography: str,
+    vintage: int,
+    acs_type: str,
+    include_moe: bool,
+) -> Optional[pd.DataFrame]:
+    """Attempt to assemble the requested slice from bulk-cache parquets.
+
+    Returns the DataFrame on a complete hit, or None to signal fall-through
+    to the live-API path. Only operates on (geography='tract', acs_type='acs5')
+    today — that's the only combo the bulk warmer currently produces for
+    sub-county data.
+    """
+    if geography != "tract" or acs_type != "acs5":
+        return None
+
+    from telltalere_census.warm_cache import (
+        bulk_parquet_path,
+        resolve_bulk_cache_dir,
+        vintage_tag_5yr,
+    )
+
+    cache_root = resolve_bulk_cache_dir()
+    vintage_tag = vintage_tag_5yr(int(vintage))
+
+    # Group requested variables by table prefix (everything before the first '_').
+    tables_to_vars: dict[str, list[str]] = {}
+    for v in requested_vars:
+        if "_" not in v:
+            return None  # non-standard var, can't bulk-read
+        table = v.split("_", 1)[0]
+        tables_to_vars.setdefault(table, []).append(v)
+
+    table_paths: dict[str, Path] = {}
+    for table in tables_to_vars:
+        p = bulk_parquet_path(cache_root, "tract", vintage_tag, table, state_fips)
+        if not p.exists():
+            return None
+        table_paths[table] = p
+
+    geo_cols = ["GEOID", "state", "county", "tract"]
+    merged: Optional[pd.DataFrame] = None
+    for table, var_list in tables_to_vars.items():
+        df = pd.read_parquet(table_paths[table])
+        keep = [c for c in geo_cols if c in df.columns]
+        for v in var_list:
+            if v not in df.columns:
+                return None  # missing requested variable inside the parquet
+            keep.append(v)
+            if include_moe:
+                moe = v[:-1] + "M" if v.endswith("E") else None
+                if moe and moe in df.columns:
+                    keep.append(moe)
+        slice_df = df[keep].copy()
+
+        if merged is None:
+            merged = slice_df
+            continue
+        non_geo_cols = [c for c in slice_df.columns if c not in geo_cols]
+        merged = merged.merge(slice_df[["GEOID"] + non_geo_cols], on="GEOID", how="inner")
+
+    return merged
