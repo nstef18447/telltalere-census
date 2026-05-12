@@ -568,6 +568,16 @@ def warm_cache(
     """
     cache_root = resolve_bulk_cache_dir(cache_dir)
 
+    resolved_api_key = api_key or os.environ.get("CENSUS_API_KEY")
+    if not resolved_api_key:
+        raise RuntimeError(
+            "warm_cache requires a Census API key: the bulk fetcher uses "
+            "`group(...)` queries which the Census API rejects without a key "
+            "(it redirects to an HTML missing-key page that breaks JSON parsing). "
+            "Set CENSUS_API_KEY in the environment or pass api_key=... explicitly. "
+            "Sign up at https://api.census.gov/data/key_signup.html"
+        )
+
     free_gb = shutil.disk_usage(cache_root).free / (1024 ** 3)
     if free_gb < min_free_gb:
         raise RuntimeError(
@@ -598,7 +608,7 @@ def warm_cache(
             tables=list(DEFAULT_WARM_TABLES) if tables is None else list(tables),
             max_workers=max_workers,
             target_rate_per_sec=target_rate_per_sec,
-            api_key=api_key or os.environ.get("CENSUS_API_KEY"),
+            api_key=resolved_api_key,
             log_path=log_path,
             dry_run=dry_run,
         )

@@ -77,8 +77,13 @@ To invalidate a cached file, delete it from disk and re-run.
 
 ## API keys
 
-`CENSUS_API_KEY` — optional. Recommended for >500 queries/day. Read lazily by
-fetch functions; never validated at import time.
+`CENSUS_API_KEY` — **required** for `warm_cache` (the bulk fetcher uses
+`group(...)` queries which the Census API rejects without a key, redirecting
+to an HTML missing-key page). `warm_cache` validates the key at startup and
+raises `RuntimeError` if it can't be resolved from the `api_key` argument or
+the env var. The on-demand `fetch_acs_data` path also reads the key but
+tolerates its absence (subject to the Census API's anonymous rate limits).
+Sign up at https://api.census.gov/data/key_signup.html.
 
 ## Bulk cache warming (session 6 / v0.4.0)
 

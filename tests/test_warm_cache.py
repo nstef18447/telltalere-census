@@ -15,6 +15,8 @@ from telltalere_census.warm_cache import (
     DEFAULT_WARM_TABLES,
     NATION_WIDE_GEOGRAPHIES,
     WarmCacheResult,
+    _base_url,
+    _build_api_params,
     _build_dataframe,
     _enumerate_tuples,
     _PermanentHTTPError,
@@ -29,6 +31,11 @@ from telltalere_census.warm_cache import (
     vintage_tag_5yr,
     warm_cache,
 )
+
+
+# Synthetic key used in tests so warm_cache's startup check passes without
+# touching the live Census API.
+_TEST_API_KEY = "test-key-for-unit-tests"
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +300,7 @@ def test_warm_cache_writes_parquets(tmp_path: Path):
             max_workers=2,
             target_rate_per_sec=100.0,  # fast for tests
             min_free_gb=0.0,
+            api_key=_TEST_API_KEY,
         )
 
     assert isinstance(result, WarmCacheResult)
@@ -329,6 +337,7 @@ def test_warm_cache_is_resumable(tmp_path: Path):
             max_workers=1,
             target_rate_per_sec=100.0,
             min_free_gb=0.0,
+            api_key=_TEST_API_KEY,
         )
 
     assert result.skipped_count == 1
@@ -355,6 +364,7 @@ def test_warm_cache_dry_run_does_not_fetch(tmp_path: Path):
             target_rate_per_sec=100.0,
             min_free_gb=0.0,
             dry_run=True,
+            api_key=_TEST_API_KEY,
         )
     assert result.completed_count == 0
     assert result.failed_count == 0
@@ -381,6 +391,7 @@ def test_warm_cache_logs_permanent_failure(tmp_path: Path):
             max_workers=1,
             target_rate_per_sec=100.0,
             min_free_gb=0.0,
+            api_key=_TEST_API_KEY,
         )
 
     assert result.failed_count == 1
@@ -412,6 +423,7 @@ def test_warm_cache_retries_transient_failure(tmp_path: Path):
             max_workers=1,
             target_rate_per_sec=100.0,
             min_free_gb=0.0,
+            api_key=_TEST_API_KEY,
         )
 
     assert result.completed_count == 1
@@ -429,4 +441,173 @@ def test_warm_cache_rejects_invalid_geography(tmp_path: Path):
             geographies_1yr=[],
             states=["17"], tables=["B01001"],
             max_workers=1, target_rate_per_sec=100.0, min_free_gb=0.0,
+            api_key=_TEST_API_KEY,
         )
+
+
+# ---------------------------------------------------------------------------
+# Missing-API-key guard (regression: v0.4.0 silently produced ~6,000 keyless
+# requests that the Census API redirected to an HTML "missing key" page,
+# which `resp.json()` then choked on with "Expecting value: line 2 column 1").
+# ---------------------------------------------------------------------------
+
+def test_warm_cache_raises_when_no_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """Loud failure beats silently fetching 6,000 missing-key HTML pages."""
+    monkeypatch.delenv("CENSUS_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="Census API key"):
+        warm_cache(
+            cache_dir=tmp_path,
+            vintages_5yr=["2020-2024"], vintages_1yr=[],
+            geographies_5yr=["tract"], geographies_1yr=[],
+            states=["17"], tables=["B01001"],
+            max_workers=1, target_rate_per_sec=100.0, min_free_gb=0.0,
+            dry_run=True,
+        )
+
+
+def test_warm_cache_accepts_key_from_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """CENSUS_API_KEY env var satisfies the key requirement."""
+    monkeypatch.setenv("CENSUS_API_KEY", _TEST_API_KEY)
+    # dry_run avoids any API call; we only care that the guard passes.
+    result = warm_cache(
+        cache_dir=tmp_path,
+        vintages_5yr=["2020-2024"], vintages_1yr=[],
+        geographies_5yr=["tract"], geographies_1yr=[],
+        states=["17"], tables=["B01001"],
+        max_workers=1, target_rate_per_sec=100.0, min_free_gb=0.0,
+        dry_run=True,
+    )
+    assert result.completed_count == 0
+
+
+# ---------------------------------------------------------------------------
+# URL construction regression tests.
+#
+# These pin the exact URL string the warmer sends to the Census API for each
+# geography × table-prefix combination. A real URL bug would change the
+# resulting URL and one of these tests would fail before any live API call.
+#
+# Canonical patterns verified 2026-05-12 against ACS5 2017 with a valid key.
+# ---------------------------------------------------------------------------
+
+def _build_url_for(
+    table: str, geography: str, state_fips, vintage_year: int = 2017,
+    acs_type: str = "acs5",
+) -> str:
+    """Build the same URL string the warmer would send, sans api_key."""
+    import requests as _r
+    base = _base_url(vintage_year, acs_type, table)
+    params = _build_api_params(table, geography, state_fips, api_key=None)
+    return _r.Request("GET", base, params=params).prepare().url
+
+
+def test_base_url_routes_b_tables_to_base_endpoint():
+    assert _base_url(2017, "acs5", "B19013") == "https://api.census.gov/data/2017/acs/acs5"
+    assert _base_url(2024, "acs5", "B01001") == "https://api.census.gov/data/2024/acs/acs5"
+
+
+def test_base_url_routes_dp_tables_to_profile_endpoint():
+    """DP-tables (data profiles) live at /acs/acs5/profile, not /acs/acs5."""
+    assert _base_url(2017, "acs5", "DP05") == "https://api.census.gov/data/2017/acs/acs5/profile"
+    assert _base_url(2024, "acs5", "DP03") == "https://api.census.gov/data/2024/acs/acs5/profile"
+
+
+def test_base_url_routes_s_tables_to_subject_endpoint():
+    assert _base_url(2017, "acs5", "S0101") == "https://api.census.gov/data/2017/acs/acs5/subject"
+
+
+def test_url_construction_puma_b_table_2017_il():
+    """Probe 1: regression for the 'PUMA URL construction' false-alarm bug.
+
+    Canonical pattern (verified live 2026-05-12, returned 88 rows):
+      https://api.census.gov/data/2017/acs/acs5
+        ?get=group(B19013)
+        &for=public+use+microdata+area:*
+        &in=state:17
+    """
+    url = _build_url_for("B19013", "puma", "17")
+    assert url == (
+        "https://api.census.gov/data/2017/acs/acs5"
+        "?get=group%28B19013%29"
+        "&for=public+use+microdata+area%3A%2A"
+        "&in=state%3A17"
+    )
+
+
+def test_url_construction_tract_dp_table_2017_il():
+    """Probe 3: regression for the 'tract+DP routing' false-alarm bug.
+
+    Canonical pattern (verified live 2026-05-12, returned 3,123 rows):
+      https://api.census.gov/data/2017/acs/acs5/profile
+        ?get=group(DP05)
+        &for=tract:*
+        &in=state:17
+    """
+    url = _build_url_for("DP05", "tract", "17")
+    assert url == (
+        "https://api.census.gov/data/2017/acs/acs5/profile"
+        "?get=group%28DP05%29"
+        "&for=tract%3A%2A"
+        "&in=state%3A17"
+    )
+
+
+def test_url_construction_tract_b_table_2017_il():
+    """Working tract + B-table reference pattern (verified 3,123 rows)."""
+    url = _build_url_for("B19013", "tract", "17")
+    assert url == (
+        "https://api.census.gov/data/2017/acs/acs5"
+        "?get=group%28B19013%29"
+        "&for=tract%3A%2A"
+        "&in=state%3A17"
+    )
+
+
+def test_url_construction_county_and_place_state_bound():
+    """County and place share the state-bound URL shape with tract."""
+    assert _build_url_for("B01001", "county", "17") == (
+        "https://api.census.gov/data/2017/acs/acs5"
+        "?get=group%28B01001%29"
+        "&for=county%3A%2A"
+        "&in=state%3A17"
+    )
+    assert _build_url_for("B01001", "place", "17") == (
+        "https://api.census.gov/data/2017/acs/acs5"
+        "?get=group%28B01001%29"
+        "&for=place%3A%2A"
+        "&in=state%3A17"
+    )
+
+
+def test_url_construction_state_geography_inlines_fips():
+    """State geography uses for=state:NN (no separate in= clause)."""
+    params = _build_api_params("B01001", "state", "17", api_key=None)
+    assert params["for"] == "state:17"
+    assert "in" not in params
+
+
+def test_url_construction_nationwide_geographies_have_no_in_clause():
+    """MSA and ZCTA queries don't take a state filter."""
+    for geo, expected_for in [
+        ("msa", "metropolitan statistical area/micropolitan statistical area:*"),
+        ("zcta", "zip code tabulation area:*"),
+    ]:
+        params = _build_api_params("B01001", geo, state_fips=None, api_key=None)
+        assert params["for"] == expected_for
+        assert "in" not in params, f"{geo} should not have an in= clause"
+
+
+def test_build_api_params_passes_key_when_provided():
+    params = _build_api_params("B19013", "tract", "17", api_key="hunter2")
+    assert params["key"] == "hunter2"
+
+
+def test_build_api_params_omits_key_when_none():
+    """The omission is fine for unit tests; the warm_cache() entry point
+    enforces that a key is always supplied before any request is built."""
+    params = _build_api_params("B19013", "tract", "17", api_key=None)
+    assert "key" not in params
